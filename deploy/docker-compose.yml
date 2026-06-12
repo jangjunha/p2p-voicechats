@@ -1,0 +1,48 @@
+services:
+  server:
+    build: ../server
+    restart: unless-stopped
+    environment:
+      VC_DB: /data/vc.sqlite3
+      VC_BIND: 0.0.0.0:8787
+      VC_TURN_SECRET: ${TURN_SECRET}
+      VC_TURN_URLS: turn:${DOMAIN}:3478?transport=udp,turn:${DOMAIN}:3478?transport=tcp
+    volumes:
+      - vc-data:/data
+
+  # TURN relay: a last-resort path for peers behind CGNAT/symmetric NAT.
+  # It relays already-encrypted SRTP and cannot read media (docs/CRYPTO.md).
+  # host networking keeps the relay port range simple.
+  coturn:
+    image: coturn/coturn:4
+    restart: unless-stopped
+    network_mode: host
+    command: >-
+      --no-cli
+      --fingerprint
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET}
+      --realm=${DOMAIN}
+      --listening-port=3478
+      --min-port=49160
+      --max-port=49200
+      --no-tlsv1
+      --no-tlsv1_1
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  vc-data:
+  caddy-data:
+  caddy-config:

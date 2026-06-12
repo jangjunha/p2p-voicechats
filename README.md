@@ -83,12 +83,14 @@ npm run tauri dev                            # full desktop app (Windows)
 Early development. Feature scope for v1 (deliberately small):
 
 - [x] Architecture & protocol design
-- [ ] Spaces, channels, invites
-- [ ] Encrypted text chat with offline catch-up
-- [ ] Voice calls (P2P mesh)
-- [ ] Screen share with sender-side codec/bitrate/resolution/fps controls
-      and system-audio capture
-- [ ] Windows installer + auto-update
+- [x] Spaces, channels, invites
+- [x] Encrypted text chat with offline catch-up
+- [x] Voice calls (P2P mesh) — *built, pending Windows validation*
+- [x] Screen share with sender-side codec/bitrate/resolution/fps controls
+      and system-audio capture — *built, pending the
+      [Windows spike](docs/SPIKE.md)*
+- [ ] Windows installer + auto-update (Tauri bundling configured; updater
+      and release pipeline still to do)
 
 Non-goals for v1: DMs, reactions, uploads, threads, search, moderation
 tooling, mobile apps. The data model deliberately leaves room for DMs and
