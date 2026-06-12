@@ -1,0 +1,32 @@
+[package]
+name = "vc-server"
+version = "0.1.0"
+edition = "2021"
+description = "Signaling and ciphertext-storage server for p2p-voicechats"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+ulid = "1"
+rand = "0.8"
+base64 = "0.22"
+ed25519-dalek = "2"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+thiserror = "2"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tempfile = "3"

@@ -86,6 +86,8 @@ space and the recipient is online; it never inspects it.
 {"type": "signal", "channel_id": "…", "from": "…", "payload": {…}, "sig": "…"}
 {"type": "member_joined", "space_id": "…",
  "user": {"user_id": "…", "name": "…", "sign_pub": "…", "kem_pub": "…"}}
+{"type": "member_removed", "space_id": "…", "user_id": "…"}
+{"type": "channel_created", "space_id": "…", "channel": {"id": "…", "name": "…"}}
 {"type": "key_request", "space_id": "…",          // wrap your epochs for this user
  "user": {"user_id": "…", "kem_pub": "…"}}
 {"type": "keys_updated", "space_id": "…", "current_epoch": 2}
