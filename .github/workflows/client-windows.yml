@@ -11,6 +11,11 @@ on:
       - "client/**"
       - ".github/workflows/client-windows.yml"
 
+permissions:
+  contents: read
+  id-token: write # sign the provenance via Sigstore
+  attestations: write # record the attestation on the repo
+
 jobs:
   build:
     runs-on: windows-latest
@@ -32,6 +37,13 @@ jobs:
       # Builds the frontend (beforeBuildCommand) then the Rust app, skipping
       # installer bundling.
       - run: npx tauri build --no-bundle
+      # SLSA build provenance: signed proof this exe came from this repo+commit
+      # via this workflow. Verify with:
+      #   gh attestation verify voicechats.exe --repo jangjunha/p2p-voicechats
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: client/src-tauri/target/release/voicechats.exe
       - uses: actions/upload-artifact@v4
         with:
           name: voicechats-windows-exe
