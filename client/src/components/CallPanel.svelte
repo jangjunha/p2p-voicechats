@@ -12,6 +12,14 @@
     spotlightId = spotlightId === id ? null : id;
   }
 
+  function toggleFullscreen(node: HTMLVideoElement) {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      node.requestFullscreen?.();
+    }
+  }
+
   /** Codecs actually negotiable in this webview (spike: verify HW variants). */
   const availableCodecs: string[] = (() => {
     const caps = typeof RTCRtpReceiver !== 'undefined' ? RTCRtpReceiver.getCapabilities('video') : null;
@@ -130,7 +138,7 @@
         <figure class="tile local" class:spotlight={spotlightId === id} class:dimmed={spotlightId != null && spotlightId !== id}>
           <!-- svelte-ignore a11y_media_has_caption -->
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <video autoplay playsinline muted use:srcObject={call.manager.localScreen} onclick={() => toggleSpotlight(id)} title={spotlightId === id ? 'Click to shrink' : 'Click to enlarge'}></video>
+          <video autoplay playsinline muted controls use:srcObject={call.manager.localScreen} onclick={() => toggleSpotlight(id)} ondblclick={(e) => toggleFullscreen(e.currentTarget)} title={(spotlightId === id ? 'Click to shrink' : 'Click to enlarge') + ' · Double-click for fullscreen'}></video>
           <figcaption>You (preview) · {statLine(call.participants.find((p) => p !== store.userId) ?? '')}</figcaption>
         </figure>
       {/if}
@@ -140,7 +148,7 @@
             <figure class="tile" class:spotlight={spotlightId === stream.id} class:dimmed={spotlightId != null && spotlightId !== stream.id}>
               <!-- svelte-ignore a11y_media_has_caption -->
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-              <video autoplay playsinline use:srcObject={stream} onclick={() => toggleSpotlight(stream.id)} title={spotlightId === stream.id ? 'Click to shrink' : 'Click to enlarge'}></video>
+              <video autoplay playsinline controls use:srcObject={stream} onclick={() => toggleSpotlight(stream.id)} ondblclick={(e) => toggleFullscreen(e.currentTarget)} title={(spotlightId === stream.id ? 'Click to shrink' : 'Click to enlarge') + ' · Double-click for fullscreen'}></video>
               <figcaption>{name(userId)} · {statLine(userId)}</figcaption>
             </figure>
           {:else}
