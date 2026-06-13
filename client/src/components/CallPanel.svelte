@@ -2,9 +2,15 @@
   import { store } from '../lib/store.svelte';
 
   let showSettings = $state(false);
+  /** Stream id currently shown large; null = grid view. */
+  let spotlightId = $state<string | null>(null);
 
   const call = $derived(store.call);
   const s = $derived(store.broadcastSettings);
+
+  function toggleSpotlight(id: string) {
+    spotlightId = spotlightId === id ? null : id;
+  }
 
   /** Codecs actually negotiable in this webview (spike: verify HW variants). */
   const availableCodecs: string[] = (() => {
@@ -118,20 +124,23 @@
       </div>
     {/if}
 
-    <div class="tiles">
+    <div class="tiles" class:has-spotlight={spotlightId != null}>
       {#if call.broadcasting && call.manager.localScreen}
-        <figure class="tile local">
+        {@const id = `local:${call.manager.localScreen.id}`}
+        <figure class="tile local" class:spotlight={spotlightId === id} class:dimmed={spotlightId != null && spotlightId !== id}>
           <!-- svelte-ignore a11y_media_has_caption -->
-          <video autoplay playsinline muted use:srcObject={call.manager.localScreen}></video>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <video autoplay playsinline muted use:srcObject={call.manager.localScreen} onclick={() => toggleSpotlight(id)} title={spotlightId === id ? 'Click to shrink' : 'Click to enlarge'}></video>
           <figcaption>You (preview) · {statLine(call.participants.find((p) => p !== store.userId) ?? '')}</figcaption>
         </figure>
       {/if}
       {#each Object.entries(call.remoteStreams) as [userId, streams] (userId)}
         {#each streams as stream (stream.id)}
           {#if hasVideo(stream)}
-            <figure class="tile">
+            <figure class="tile" class:spotlight={spotlightId === stream.id} class:dimmed={spotlightId != null && spotlightId !== stream.id}>
               <!-- svelte-ignore a11y_media_has_caption -->
-              <video autoplay playsinline use:srcObject={stream}></video>
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <video autoplay playsinline use:srcObject={stream} onclick={() => toggleSpotlight(stream.id)} title={spotlightId === stream.id ? 'Click to shrink' : 'Click to enlarge'}></video>
               <figcaption>{name(userId)} · {statLine(userId)}</figcaption>
             </figure>
           {:else}
@@ -174,14 +183,30 @@
   .settings label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; }
   .estimate { color: var(--fg-1); font-size: 12px; margin-left: auto; }
 
-  .tiles { display: flex; gap: 10px; flex-wrap: wrap; }
+  .tiles { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
   .tile { margin: 0; max-width: 480px; flex: 1 1 320px; }
   .tile video {
     width: 100%;
     border-radius: var(--radius);
     background: #000;
     aspect-ratio: 16 / 9;
+    cursor: zoom-in;
+    display: block;
   }
   .tile.local video { opacity: 0.9; }
+
+  /* Spotlight: clicked tile fills the row; the rest shrink to a thumbnail strip. */
+  .tiles.has-spotlight { flex-wrap: nowrap; }
+  .tile.spotlight {
+    max-width: none;
+    flex: 1 1 100%;
+    order: -1;
+  }
+  .tile.spotlight video {
+    cursor: zoom-out;
+    max-height: 70vh;
+    object-fit: contain;
+  }
+  .tile.dimmed { flex: 0 0 200px; max-width: 200px; }
   figcaption { font-size: 11.5px; color: var(--fg-1); margin-top: 2px; }
 </style>
