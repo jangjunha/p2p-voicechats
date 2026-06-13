@@ -11,10 +11,9 @@ pub fn allow_media(window: &tauri::WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         ICoreWebView2, ICoreWebView2PermissionRequestedEventArgs,
         COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
-        COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+        COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
     };
     use webview2_com::PermissionRequestedEventHandler;
-    use windows::Win32::System::WinRT::EventRegistrationToken;
 
     let result = window.with_webview(|webview| unsafe {
         let core: ICoreWebView2 = match webview.controller().CoreWebView2() {
@@ -29,7 +28,9 @@ pub fn allow_media(window: &tauri::WebviewWindow) {
             move |_sender: Option<ICoreWebView2>,
                   args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
                 if let Some(args) = args {
-                    let kind = args.PermissionKind()?;
+                    // webview2-com models the getter as an out-parameter.
+                    let mut kind = COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION;
+                    args.PermissionKind(&mut kind)?;
                     if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
                         || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
                     {
@@ -40,7 +41,9 @@ pub fn allow_media(window: &tauri::WebviewWindow) {
             },
         ));
 
-        let mut token = EventRegistrationToken::default();
+        // The token type is inferred from add_PermissionRequested's signature,
+        // which avoids depending on EventRegistrationToken's exact module path.
+        let mut token = Default::default();
         if let Err(e) = core.add_PermissionRequested(&handler, &mut token) {
             eprintln!("voicechats: failed to register PermissionRequested: {e}");
         }
