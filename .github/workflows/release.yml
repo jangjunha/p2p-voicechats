@@ -18,7 +18,9 @@ on:
 
 permissions:
   contents: write # create the release + tag and upload binaries
-  packages: write # push the image to GHCR
+  packages: write # push the image (and its attestation) to GHCR
+  id-token: write # sign provenance via Sigstore
+  attestations: write # record build provenance attestations
 
 jobs:
   setup:
@@ -90,6 +92,10 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
+      # SLSA build provenance for the downloadable archives.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tar.gz
       # Creates the release and the v* tag (at this run's commit) if absent.
       - uses: softprops/action-gh-release@v2
         with:
@@ -120,7 +126,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: server/ctx
           file: server/Dockerfile.release
@@ -131,3 +138,9 @@ jobs:
             ghcr.io/${{ github.repository }}/server:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      # SLSA build provenance for the image, attached to it in GHCR by digest.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/server
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
