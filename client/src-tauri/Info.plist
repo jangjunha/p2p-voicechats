@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the macOS bundle by Tauri. Required so WKWebView can prompt
+     for microphone/camera during voice/video calls; without these keys macOS
+     denies getUserMedia. Screen-recording permission is requested by macOS at
+     runtime (System Settings ▸ Privacy ▸ Screen Recording), not here. -->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>voicechats uses your microphone for voice calls.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>voicechats uses your camera for video.</string>
+  </dict>
+</plist>

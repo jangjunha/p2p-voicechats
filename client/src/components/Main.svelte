@@ -1,6 +1,23 @@
 <script lang="ts">
   import ChannelView from './ChannelView.svelte';
+  import Modal from './Modal.svelte';
+  import { copyText } from '../lib/clipboard';
   import { store } from '../lib/store.svelte';
+
+  // Native prompt()/alert()/confirm() are no-ops in some WebViews (e.g. macOS
+  // WKWebView), so every interaction goes through an in-app modal instead.
+  type ModalState =
+    | null
+    | { kind: 'newSpace' }
+    | { kind: 'join' }
+    | { kind: 'invite'; token: string }
+    | { kind: 'backup'; data: string }
+    | { kind: 'kick'; userId: string; name: string };
+
+  let modal = $state<ModalState>(null);
+  let textInput = $state('');
+  let copied = $state(false);
+  let busy = $state(false);
 
   let newChannelName = $state('');
   let addingChannel = $state(false);
@@ -8,27 +25,78 @@
   const space = $derived(store.activeSpace);
   const isOwner = $derived(space !== null && space.owner_id === store.userId);
 
-  async function createSpace() {
-    const name = prompt('Space name');
-    if (name?.trim()) await store.createSpace(name.trim());
+  function open(state: ModalState) {
+    textInput = '';
+    copied = false;
+    modal = state;
+  }
+  function close() {
+    modal = null;
   }
 
-  async function joinSpace() {
-    const token = prompt('Invite token');
-    if (token?.trim()) {
-      try {
-        await store.acceptInvite(token);
-      } catch (e) {
-        store.error = e instanceof Error ? e.message : String(e);
-      }
+  async function submitNewSpace(e: SubmitEvent) {
+    e.preventDefault();
+    const name = textInput.trim();
+    if (!name) return;
+    busy = true;
+    try {
+      await store.createSpace(name);
+      close();
+    } catch (err) {
+      store.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function submitJoin(e: SubmitEvent) {
+    e.preventDefault();
+    const token = textInput.trim();
+    if (!token) return;
+    busy = true;
+    try {
+      await store.acceptInvite(token);
+      close();
+    } catch (err) {
+      store.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
     }
   }
 
   async function invite() {
     if (!space || !store.api) return;
-    const { token } = await store.api.createInvite(space.id);
-    await navigator.clipboard.writeText(token);
-    alert(`Invite token copied to clipboard (valid 7 days):\n\n${token}`);
+    busy = true;
+    try {
+      const { token } = await store.api.createInvite(space.id);
+      open({ kind: 'invite', token });
+      copied = await copyText(token);
+    } catch (err) {
+      store.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function backupIdentity() {
+    open({ kind: 'backup', data: store.exportIdentity() });
+  }
+
+  async function copyCurrent(text: string) {
+    copied = await copyText(text);
+  }
+
+  async function confirmKick() {
+    if (modal?.kind !== 'kick' || !space) return;
+    busy = true;
+    try {
+      await store.removeMember(space.id, modal.userId);
+      close();
+    } catch (err) {
+      store.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
   }
 
   async function addChannel(e: SubmitEvent) {
@@ -38,18 +106,6 @@
     newChannelName = '';
     addingChannel = false;
     await store.refreshSpaces();
-  }
-
-  async function backupIdentity() {
-    await navigator.clipboard.writeText(store.exportIdentity());
-    alert('Identity backup copied to clipboard. Store it somewhere safe — it is the only way to move this account to another device.');
-  }
-
-  async function kick(userId: string, name: string) {
-    if (!space) return;
-    if (confirm(`Remove ${name} from this space? The space key will be rotated.`)) {
-      await store.removeMember(space.id, userId);
-    }
   }
 </script>
 
@@ -65,8 +121,8 @@
         {s.name.slice(0, 2).toUpperCase()}
       </button>
     {/each}
-    <button class="space-btn dim" title="Create space" onclick={createSpace}>+</button>
-    <button class="space-btn dim" title="Join with invite" onclick={joinSpace}>⤓</button>
+    <button class="space-btn dim" title="Create space" onclick={() => open({ kind: 'newSpace' })}>+</button>
+    <button class="space-btn dim" title="Join with invite" onclick={() => open({ kind: 'join' })}>⤓</button>
     <div class="spacer"></div>
     <button class="space-btn dim" title="Back up identity" onclick={backupIdentity}>🔑</button>
   </nav>
@@ -102,7 +158,11 @@
             <span class:me={m.user_id === store.userId}>{m.name}</span>
             {#if m.role === 'owner'}<span class="badge">owner</span>{/if}
             {#if isOwner && m.user_id !== store.userId}
-              <button class="kick" title="Remove member" onclick={() => kick(m.user_id, m.name)}>✕</button>
+              <button
+                class="kick"
+                title="Remove member"
+                onclick={() => open({ kind: 'kick', userId: m.user_id, name: m.name })}
+              >✕</button>
             {/if}
           </div>
         {/each}
@@ -124,6 +184,64 @@
     {/if}
   </main>
 </div>
+
+{#if modal?.kind === 'newSpace'}
+  <Modal title="Create space" onclose={close}>
+    <form onsubmit={submitNewSpace}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input bind:value={textInput} placeholder="Space name" maxlength="64" autofocus />
+      <div class="actions">
+        <button type="button" onclick={close}>Cancel</button>
+        <button class="primary" disabled={busy || !textInput.trim()}>Create</button>
+      </div>
+    </form>
+  </Modal>
+{:else if modal?.kind === 'join'}
+  <Modal title="Join with invite" onclose={close}>
+    <form onsubmit={submitJoin}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input bind:value={textInput} placeholder="Paste invite token" autofocus />
+      <div class="actions">
+        <button type="button" onclick={close}>Cancel</button>
+        <button class="primary" disabled={busy || !textInput.trim()}>Join</button>
+      </div>
+    </form>
+  </Modal>
+{:else if modal?.kind === 'invite'}
+  {@const token = modal.token}
+  <Modal title="Invite token" onclose={close}>
+    <p class="note">Share this token with a friend. Valid for 7 days.</p>
+    <input class="reveal" readonly value={token} onfocus={(e) => e.currentTarget.select()} />
+    <div class="actions">
+      <button class="primary" onclick={() => copyCurrent(token)}>
+        {copied ? 'Copied!' : 'Copy'}
+      </button>
+    </div>
+  </Modal>
+{:else if modal?.kind === 'backup'}
+  {@const data = modal.data}
+  <Modal title="Identity backup" onclose={close}>
+    <p class="note">
+      This is the only way to move your account to another device. Store it
+      somewhere safe and private — anyone with it can read your messages.
+    </p>
+    <textarea class="reveal" readonly rows="4" onfocus={(e) => e.currentTarget.select()}>{data}</textarea>
+    <div class="actions">
+      <button class="primary" onclick={() => copyCurrent(data)}>
+        {copied ? 'Copied!' : 'Copy'}
+      </button>
+    </div>
+  </Modal>
+{:else if modal?.kind === 'kick'}
+  {@const name = modal.name}
+  <Modal title="Remove member" onclose={close}>
+    <p class="note">Remove <b>{name}</b> from this space? The space key will be rotated so they can't read new messages.</p>
+    <div class="actions">
+      <button type="button" onclick={close}>Cancel</button>
+      <button class="danger" disabled={busy} onclick={confirmKick}>Remove</button>
+    </div>
+  </Modal>
+{/if}
 
 <style>
   .layout {
@@ -189,4 +307,17 @@
   main { background: var(--bg-2); min-width: 0; }
   .empty, .hint { color: var(--fg-1); padding: 16px; }
   .empty { display: grid; place-items: center; height: 100%; }
+
+  /* modal contents */
+  form { display: flex; flex-direction: column; gap: 12px; }
+  form input { width: 100%; }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .note { margin: 0; color: var(--fg-1); font-size: 13px; line-height: 1.45; }
+  .reveal {
+    width: 100%;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    word-break: break-all;
+    resize: vertical;
+  }
 </style>

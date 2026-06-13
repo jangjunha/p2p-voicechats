@@ -12,6 +12,13 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Windows-only: grant getUserMedia (mic/camera) inside WebView2. Versions are
+# pinned to match wry's (see Cargo.lock); if a future wry bump causes a type
+# mismatch on `controller()`, run `cargo tree -i webview2-com` and align these.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows = { version = "0.61", features = ["Win32_System_WinRT"] }
+
 [profile.release]
 strip = true
 lto = true
