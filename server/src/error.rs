@@ -24,6 +24,9 @@ impl ApiError {
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self::Status(StatusCode::NOT_FOUND, msg.into())
     }
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self::Status(StatusCode::CONFLICT, msg.into())
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -40,6 +43,7 @@ impl IntoResponse for ApiError {
             StatusCode::UNAUTHORIZED => "unauthorized",
             StatusCode::FORBIDDEN => "forbidden",
             StatusCode::NOT_FOUND => "not_found",
+            StatusCode::CONFLICT => "conflict",
             _ => "internal",
         };
         (status, Json(json!({ "error": code, "message": message }))).into_response()

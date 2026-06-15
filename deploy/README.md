@@ -81,6 +81,8 @@ your distro (`use-auth-secret` + the same secret).
 | `MALGUEM_TURN_URLS` | empty | TURN URLs handed to clients |
 | `MALGUEM_TURN_TTL` | `3600` | TURN credential lifetime (seconds) |
 | `MALGUEM_STUN_URLS` | Google STUN | STUN URLs handed to clients |
+| `MALGUEM_SPACE_CREATOR_SIGN_PUBS` | empty | CSV of `sign_pub` keys allowed to create spaces; empty = anyone |
+| `MALGUEM_MAX_USERS` | unset | Cap on total registered users; new registrations get `409` once reached; unset = unlimited |
 
 ## Backups
 

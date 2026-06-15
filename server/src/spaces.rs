@@ -111,6 +111,21 @@ pub async fn create_space(
     if name.is_empty() || name.len() > 64 {
         return Err(ApiError::bad_request("name must be 1-64 characters"));
     }
+    // Optional allowlist: only the configured signing keys may create spaces.
+    if !state.cfg.space_creator_sign_pubs.is_empty() {
+        let sign_pub: String = state.db.with(|c| {
+            c.query_row(
+                "SELECT sign_pub FROM users WHERE id = ?1",
+                [&user_id],
+                |r| r.get(0),
+            )
+        })?;
+        if !state.cfg.space_creator_sign_pubs.contains(&sign_pub) {
+            return Err(ApiError::forbidden(
+                "not allowed to create spaces on this server",
+            ));
+        }
+    }
     let space_id = uuid::Uuid::new_v4().to_string();
     let channel_id = uuid::Uuid::new_v4().to_string();
     let space = state.db.with(|c| {

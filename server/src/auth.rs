@@ -85,14 +85,25 @@ pub async fn register(
     decode_key32(&req.kem_pub)?;
 
     let user_id = uuid::Uuid::new_v4().to_string();
+    let max_users = state.cfg.max_users;
+    // Check the cap and insert in one locked section so concurrent registrations
+    // can't both slip past a full roster.
     let res = state.db.with(|c| {
+        if let Some(max) = max_users {
+            let count: i64 = c.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+            if count >= max {
+                return Ok(None);
+            }
+        }
         c.execute(
             "INSERT INTO users (id, name, sign_pub, kem_pub, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![user_id, name, req.sign_pub, req.kem_pub, now_ms()],
-        )
+        )?;
+        Ok(Some(()))
     });
     match res {
-        Ok(_) => Ok(Json(json!({ "user_id": user_id }))),
+        Ok(Some(())) => Ok(Json(json!({ "user_id": user_id }))),
+        Ok(None) => Err(ApiError::conflict("the server has reached its user limit")),
         Err(rusqlite::Error::SqliteFailure(e, _))
             if e.code == rusqlite::ErrorCode::ConstraintViolation =>
         {

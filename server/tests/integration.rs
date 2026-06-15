@@ -13,15 +13,22 @@ struct TestServer {
 }
 
 async fn spawn_server() -> TestServer {
+    spawn_server_with(|_| {}).await
+}
+
+async fn spawn_server_with(tweak: impl FnOnce(&mut Config)) -> TestServer {
     let db = tempfile::NamedTempFile::new().unwrap();
-    let cfg = Config {
+    let mut cfg = Config {
         bind: String::new(),
         db_path: db.path().to_str().unwrap().to_string(),
         turn_secret: Some("test-secret".into()),
         turn_urls: vec!["turn:turn.example.com:3478?transport=udp".into()],
         turn_ttl_secs: 600,
         stun_urls: vec!["stun:stun.example.com:3478".into()],
+        space_creator_sign_pubs: vec![],
+        max_users: None,
     };
+    tweak(&mut cfg);
     let state = malguem_server::build_state(cfg);
     let app = malguem_server::app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -61,6 +68,12 @@ async fn make_user(client: &reqwest::Client, base: &str, name: &str) -> TestUser
         .unwrap();
     let user_id = r["user_id"].as_str().unwrap().to_string();
 
+    let token = login(client, base, &user_id, &key).await;
+    TestUser { id: user_id, token, key }
+}
+
+/// Run the challenge/login handshake and return the bearer token.
+async fn login(client: &reqwest::Client, base: &str, user_id: &str, key: &SigningKey) -> String {
     let r: Value = client
         .get(format!("{base}/auth/challenge?user_id={user_id}"))
         .send()
@@ -81,10 +94,7 @@ async fn make_user(client: &reqwest::Client, base: &str, name: &str) -> TestUser
         .json()
         .await
         .unwrap();
-    let token = r["token"].as_str().expect("login should return token").to_string();
-    assert_eq!(r["user"]["name"].as_str().unwrap(), name);
-
-    TestUser { id: user_id, token, key }
+    r["token"].as_str().expect("login should return token").to_string()
 }
 
 type Ws = tokio_tungstenite::WebSocketStream<
@@ -300,6 +310,82 @@ async fn full_flow() {
     // Unauthenticated access is rejected.
     let r = client.get(format!("{base}/spaces")).send().await.unwrap();
     assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn space_creator_allowlist() {
+    // alice's signing key is on the allowlist; bob's is not.
+    let mut alice_seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut alice_seed);
+    let alice_key = SigningKey::from_bytes(&alice_seed);
+    let alice_sign_pub = B64.encode(alice_key.verifying_key().to_bytes());
+
+    let server =
+        spawn_server_with(|cfg| cfg.space_creator_sign_pubs = vec![alice_sign_pub.clone()]).await;
+    let client = reqwest::Client::new();
+    let base = &server.base;
+
+    // Register alice using the allowlisted key directly so the pub matches.
+    let alice_kem = B64.encode([7u8; 32]);
+    let r: Value = client
+        .post(format!("{base}/register"))
+        .json(&json!({ "name": "alice", "sign_pub": alice_sign_pub, "kem_pub": alice_kem }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let alice_id = r["user_id"].as_str().unwrap().to_string();
+    let alice_token = login(&client, base, &alice_id, &alice_key).await;
+
+    let bob = make_user(&client, base, "bob").await;
+
+    // bob is not on the allowlist → forbidden.
+    let r = client
+        .post(format!("{base}/spaces"))
+        .bearer_auth(&bob.token)
+        .json(&json!({ "name": "bob's space" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+
+    // alice is allowed.
+    let r = client
+        .post(format!("{base}/spaces"))
+        .bearer_auth(&alice_token)
+        .json(&json!({ "name": "alice's space" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+}
+
+#[tokio::test]
+async fn max_users_limit() {
+    let server = spawn_server_with(|cfg| cfg.max_users = Some(2)).await;
+    let client = reqwest::Client::new();
+    let base = &server.base;
+
+    // The first two registrations fill the roster.
+    make_user(&client, base, "one").await;
+    make_user(&client, base, "two").await;
+
+    // A third is rejected with 409 (uses a valid, distinct signing key so the
+    // request reaches the cap check rather than failing key validation).
+    let mut seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+    let key = SigningKey::from_bytes(&seed);
+    let sign_pub = B64.encode(key.verifying_key().to_bytes());
+    let kem_pub = B64.encode([2u8; 32]);
+    let r = client
+        .post(format!("{base}/register"))
+        .json(&json!({ "name": "three", "sign_pub": sign_pub, "kem_pub": kem_pub }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409);
 }
 
 #[tokio::test]

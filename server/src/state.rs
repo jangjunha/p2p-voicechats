@@ -11,6 +11,12 @@ pub struct Config {
     pub turn_urls: Vec<String>,
     pub turn_ttl_secs: u64,
     pub stun_urls: Vec<String>,
+    /// If non-empty, only users whose `sign_pub` appears here may create spaces.
+    /// Empty means anyone can (backwards compatible).
+    pub space_creator_sign_pubs: Vec<String>,
+    /// If set, registration is refused once the total user count reaches this.
+    /// None means unlimited (backwards compatible).
+    pub max_users: Option<i64>,
 }
 
 impl Config {
@@ -41,6 +47,11 @@ impl Config {
                     v
                 }
             },
+            space_creator_sign_pubs: csv(std::env::var("MALGUEM_SPACE_CREATOR_SIGN_PUBS").ok()),
+            max_users: std::env::var("MALGUEM_MAX_USERS")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .filter(|&n| n >= 0),
         }
     }
 }
