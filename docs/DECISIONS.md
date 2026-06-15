@@ -118,3 +118,30 @@ Full design in [CRYPTO.md](CRYPTO.md). Summary:
   signatures — secure updates without an OS code-signing certificate.
   SmartScreen will warn on first install (acceptable for a friend group; an OS
   signing cert or winget can be added later without redesign).
+
+## 7. Multi-server client & credential storage
+
+Added 2026-06-15, after the proof-of-concept, by the project owner.
+
+**One client connects to multiple servers at once, each with its own
+identity, and credentials live in the OS keychain — not localStorage.**
+
+- **Per-server identity.** `Identity{sign_key, kem_key}` is generated and
+  pinned per *server*, never per space and never reused across servers. A
+  server only ever sees the one identity registered with it.
+- **N live connections.** On boot the client walks the account vault and logs
+  into every server in parallel, holding one `Api` + one `EventSocket` per
+  server simultaneously. All per-server reactive state (spaces, members,
+  messages, space keys) carries a `serverId` dimension and every action routes
+  to that server's `Api`/socket. The left sidebar lists every server's spaces
+  expanded together.
+- **Keychain over localStorage.** Secrets — identity private keys and auth
+  tokens — are stored in the OS keychain via a small Rust `keyring`-crate
+  command surface (`keychain_get/set/delete`) invoked from a TypeScript
+  wrapper. This realizes the "Rust shell handles identity-key storage" line
+  from decision 2. Non-secret values (server URL, user id, display name) stay
+  in localStorage as the account index (the "vault"). A plain browser dev build
+  (vite, no Tauri) transparently falls back to localStorage.
+- This supersedes the v1 "single account in localStorage" shape from the
+  proof-of-concept; the single-device-per-identity simplification in decision 5
+  still holds (moving a device = exporting that server's identity key).

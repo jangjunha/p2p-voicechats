@@ -41,7 +41,7 @@
   }
 
   function name(userId: string): string {
-    return call ? store.memberName(call.spaceId, userId) : userId;
+    return call ? store.memberName(call.serverId, call.spaceId, userId) : userId;
   }
 
   function statLine(userId: string): string {
@@ -72,7 +72,7 @@
     <div class="row controls">
       <div class="participants">
         {#each call.participants as p (p)}
-          <span class="chip" class:me={p === store.userId}>{name(p)}</span>
+          <span class="chip" class:me={p === call.selfId}>{name(p)}</span>
         {/each}
       </div>
       <div class="buttons">
@@ -139,7 +139,7 @@
           <!-- svelte-ignore a11y_media_has_caption -->
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <video autoplay playsinline muted controls use:srcObject={call.manager.localScreen} onclick={() => toggleSpotlight(id)} ondblclick={(e) => toggleFullscreen(e.currentTarget)} title={(spotlightId === id ? 'Click to shrink' : 'Click to enlarge') + ' · Double-click for fullscreen'}></video>
-          <figcaption>You (preview) · {statLine(call.participants.find((p) => p !== store.userId) ?? '')}</figcaption>
+          <figcaption>You (preview) · {statLine(call.participants.find((p) => p !== call.selfId) ?? '')}</figcaption>
         </figure>
       {/if}
       {#each Object.entries(call.remoteStreams) as [userId, streams] (userId)}

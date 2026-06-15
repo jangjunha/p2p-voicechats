@@ -3,15 +3,15 @@
   import type { Space } from '../lib/api';
   import { store } from '../lib/store.svelte';
 
-  let { channelId, space }: { channelId: string; space: Space } = $props();
+  let { serverId, channelId, space }: { serverId: string; channelId: string; space: Space } = $props();
 
   let draft = $state('');
   let scroller = $state<HTMLElement | null>(null);
 
   const channel = $derived(space.channels.find((c) => c.id === channelId));
-  const msgs = $derived(store.messages[channelId] ?? []);
-  const inThisCall = $derived(store.call?.channelId === channelId);
-  const locked = $derived(store.lockedSpaces[space.id] === true);
+  const msgs = $derived(store.messagesOf(serverId, channelId));
+  const inThisCall = $derived(store.call?.serverId === serverId && store.call?.channelId === channelId);
+  const locked = $derived(store.lockedOf(serverId, space.id));
 
   // Keep scrolled to the bottom as messages arrive.
   $effect(() => {
@@ -25,7 +25,7 @@
     if (!text) return;
     draft = '';
     try {
-      await store.sendMessage(channelId, text);
+      await store.sendMessage(serverId, channelId, text);
     } catch (err) {
       store.error = err instanceof Error ? err.message : String(err);
     }
@@ -40,7 +40,7 @@
   <header>
     <span class="title"># {channel?.name}</span>
     {#if !inThisCall}
-      <button class="primary" onclick={() => store.joinCall(channelId)} disabled={store.call !== null}>
+      <button class="primary" onclick={() => store.joinCall(serverId, channelId)} disabled={store.call !== null}>
         Join call
       </button>
     {/if}
