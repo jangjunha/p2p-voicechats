@@ -8,6 +8,10 @@ use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        // Open shared links in the user's real browser (never our webview), and
+        // fetch OpenGraph metadata client-side (no CORS, server stays blind).
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             keychain::keychain_get,
             keychain::keychain_set,

@@ -46,6 +46,23 @@ time-sortable, used as the pagination cursor).
 | POST | `/api/channels/:id/messages` | `{epoch, nonce, ct, sig}` → `{id, created_at}`. Fans out `message_new` to online space members. |
 | GET | `/api/channels/:id/messages?before=<ulid>&limit=50` | Newest-first page of `{id, sender_id, epoch, nonce, ct, sig, created_at}`. |
 
+The decrypted message plaintext is a small JSON object tagged by `t`: `{"t":"text","body":"…"}` for chat, `{"t":"sticker","id":"<sticker_id>"}` to send a space sticker. Unknown tags render as a placeholder, so new body types are backward-compatible.
+
+### Stickers (owner-managed, ciphertext blobs)
+
+Stickers are space assets — (animated) webp images uploaded by the owner,
+end-to-end encrypted with the space key just like messages. The server stores
+and serves the ciphertext blob and never sees the image. `ct` is the base64url
+AEAD ciphertext of the webp bytes under the space key for `epoch` (AAD binds
+`space_id` and `epoch`; see CRYPTO.md).
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/spaces/:id/stickers` | `[{id, name, epoch, created_by, created_at}]` — metadata only. Any member. |
+| GET | `/api/spaces/:id/stickers/:sticker_id` | `{id, name, epoch, nonce, ct, created_at}` — the encrypted blob, fetched on demand. Any member. |
+| POST | `/api/spaces/:id/stickers` | `{name, epoch, nonce, ct}` → metadata. Owner only. `epoch` must reference an existing space key; `ct` ≤ 2 MiB. Fans out `sticker_added`. |
+| DELETE | `/api/spaces/:id/stickers/:sticker_id` | Owner only. Fans out `sticker_removed`. |
+
 ### TURN
 
 | Method | Path | Notes |
@@ -91,6 +108,9 @@ space and the recipient is online; it never inspects it.
 {"type": "key_request", "space_id": "…",          // wrap your epochs for this user
  "user": {"user_id": "…", "kem_pub": "…"}}
 {"type": "keys_updated", "space_id": "…", "current_epoch": 2}
+{"type": "sticker_added", "space_id": "…",
+ "sticker": {"id": "…", "name": "…", "epoch": 1, "created_by": "…", "created_at": 0}}
+{"type": "sticker_removed", "space_id": "…", "sticker_id": "…"}
 ```
 
 ### Call membership semantics

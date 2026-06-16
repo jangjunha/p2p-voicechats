@@ -3,6 +3,7 @@ pub mod db;
 pub mod error;
 pub mod spaces;
 pub mod state;
+pub mod stickers;
 pub mod turn;
 pub mod ws;
 
@@ -44,6 +45,14 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route(
             "/api/channels/{channel_id}/messages",
             post(spaces::post_message).get(spaces::fetch_messages),
+        )
+        .route(
+            "/api/spaces/{space_id}/stickers",
+            post(stickers::create_sticker).get(stickers::list_stickers),
+        )
+        .route(
+            "/api/spaces/{space_id}/stickers/{sticker_id}",
+            get(stickers::fetch_sticker).delete(stickers::delete_sticker),
         )
         .route("/api/turn-credentials", get(turn::credentials))
         .route("/api/ws", get(ws::ws_handler))

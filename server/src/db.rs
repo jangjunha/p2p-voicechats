@@ -97,4 +97,20 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages (channel_id, id);
+
+-- Space stickers: owner-uploaded (animated) webp images, end-to-end encrypted
+-- with the space key exactly like messages. `ct` is the base64url ciphertext of
+-- the webp bytes (AEAD under the space key for `epoch`); the server stores the
+-- blob opaquely and never sees the image.
+CREATE TABLE IF NOT EXISTS stickers (
+    id          TEXT PRIMARY KEY,    -- UUIDv4
+    space_id    TEXT NOT NULL REFERENCES spaces(id),
+    name        TEXT NOT NULL,
+    epoch       INTEGER NOT NULL,
+    nonce       TEXT NOT NULL,
+    ct          TEXT NOT NULL,
+    created_by  TEXT NOT NULL REFERENCES users(id),
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stickers_space ON stickers (space_id, created_at);
 "#;

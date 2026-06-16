@@ -38,6 +38,21 @@ export interface TurnCredentials {
   ttl_secs: number;
 }
 
+/** Sticker metadata (no ciphertext); the blob is fetched separately. */
+export interface StickerMeta {
+  id: string;
+  name: string;
+  epoch: number;
+  created_by: string;
+  created_at: number;
+}
+
+/** A sticker with its encrypted webp blob. */
+export interface StickerFull extends StickerMeta {
+  nonce: string;
+  ct: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -135,6 +150,20 @@ export class Api {
     if (before) q.set('before', before);
     q.set('limit', String(limit));
     return this.req<{ messages: WireMessage[] }>('GET', `/channels/${channelId}/messages?${q}`);
+  }
+
+  // stickers
+  listStickers(spaceId: string) {
+    return this.req<{ stickers: StickerMeta[] }>('GET', `/spaces/${spaceId}/stickers`);
+  }
+  fetchSticker(spaceId: string, stickerId: string) {
+    return this.req<StickerFull>('GET', `/spaces/${spaceId}/stickers/${stickerId}`);
+  }
+  createSticker(spaceId: string, sticker: { name: string; epoch: number; nonce: string; ct: string }) {
+    return this.req<StickerMeta>('POST', `/spaces/${spaceId}/stickers`, sticker);
+  }
+  deleteSticker(spaceId: string, stickerId: string) {
+    return this.req<{ ok: true }>('DELETE', `/spaces/${spaceId}/stickers/${stickerId}`);
   }
 
   // turn

@@ -88,8 +88,31 @@ sender's pinned key **before** decrypting; the AAD binds the ciphertext to
 its space/channel/epoch/sender so the server cannot replay a message into a
 different channel or attribute it to another sender.
 
-Plaintext message JSON is `{ "t": "text", "body": "…" }` — versioned so DMs,
-attachments, etc. can be added later without schema breakage.
+Plaintext message JSON is tagged by `t`: `{ "t": "text", "body": "…" }` for
+chat and `{ "t": "sticker", "id": "<sticker_id>" }` to send a space sticker.
+The tag is versioned so DMs, attachments, etc. can be added later without
+schema breakage.
+
+## Sticker encryption
+
+Stickers are space assets (animated webp), uploaded by the owner and shared
+with all members, so they are encrypted with the **space key** rather than a
+per-recipient wrap. The owner encrypts the webp bytes client-side under the
+current epoch key:
+
+```
+nonce = random 24 bytes
+aad   = "vc-sticker-v1:" || space_id || ":" || epoch
+ct    = XChaCha20-Poly1305(key = K_epoch, nonce, aad, plaintext = webp bytes)
+```
+
+The server stores `{epoch, nonce, ct}` opaquely. Members decrypt with the same
+epoch key on display; because clients retain every epoch key they have been
+given, stickers stay readable across key rotations. There is no per-sticker
+signature — the AEAD tag authenticates the blob, only members hold the key, and
+only the owner may upload (enforced server-side). A malicious member with the
+key still cannot publish a sticker (no upload permission) or swap an existing
+one (addressed by id, never overwritten).
 
 ## Call security
 

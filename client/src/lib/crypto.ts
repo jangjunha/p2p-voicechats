@@ -11,6 +11,7 @@ import { randomBytes } from '@noble/hashes/utils';
 const SEAL_INFO = 'vc-seal-v1';
 const MSG_CONTEXT = 'vc-msg-v1:';
 const SIGNAL_CONTEXT = 'vc-signal-v1:';
+const STICKER_CONTEXT = 'vc-sticker-v1:';
 const LOGIN_CONTEXT = 'vc-login:';
 
 const te = new TextEncoder();
@@ -181,6 +182,39 @@ export function decryptMessage(
   if (!ok) throw new Error('message signature verification failed');
   const pt = xchacha20poly1305(spaceKey, nonce, messageAad(meta)).decrypt(ct);
   return JSON.parse(td.decode(pt));
+}
+
+// ---------- binary blobs (stickers) ----------
+
+/**
+ * Symmetric AEAD for a binary blob under the space key, used for sticker
+ * images. Authentication comes from the AEAD tag bound to `${spaceId}:${epoch}`
+ * as associated data; there's no per-blob signature because only the owner can
+ * upload (enforced server-side) and only space members hold the key.
+ */
+function blobAad(spaceId: string, epoch: number): Uint8Array {
+  return te.encode(`${STICKER_CONTEXT}${spaceId}:${epoch}`);
+}
+
+export function encryptBlob(
+  spaceKey: Uint8Array,
+  spaceId: string,
+  epoch: number,
+  data: Uint8Array,
+): { nonce: string; ct: string } {
+  const nonce = randomBytes(24);
+  const ct = xchacha20poly1305(spaceKey, nonce, blobAad(spaceId, epoch)).encrypt(data);
+  return { nonce: b64u(nonce), ct: b64u(ct) };
+}
+
+export function decryptBlob(
+  spaceKey: Uint8Array,
+  spaceId: string,
+  epoch: number,
+  nonce: string,
+  ct: string,
+): Uint8Array {
+  return xchacha20poly1305(spaceKey, unb64u(nonce), blobAad(spaceId, epoch)).decrypt(unb64u(ct));
 }
 
 // ---------- call signaling ----------

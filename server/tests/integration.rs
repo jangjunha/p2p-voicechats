@@ -389,3 +389,124 @@ async fn key_rotation_rules() {
         .unwrap();
     assert_eq!(r.status(), 403);
 }
+
+#[tokio::test]
+async fn stickers_owner_only() {
+    let server = spawn_server().await;
+    let client = reqwest::Client::new();
+    let base = &server.base;
+
+    let owner = make_user(&client, base, "owner").await;
+    let member = make_user(&client, base, "member").await;
+
+    let space: Value = client
+        .post(format!("{base}/spaces"))
+        .bearer_auth(&owner.token)
+        .json(&json!({ "name": "s" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let space_id = space["id"].as_str().unwrap();
+
+    let invite: Value = client
+        .post(format!("{base}/spaces/{space_id}/invites"))
+        .bearer_auth(&owner.token)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    client
+        .post(format!("{base}/invites/{}/accept", invite["token"].as_str().unwrap()))
+        .bearer_auth(&member.token)
+        .send()
+        .await
+        .unwrap();
+
+    // The owner uploads a sticker (ciphertext blob, opaque to the server).
+    let created: Value = client
+        .post(format!("{base}/spaces/{space_id}/stickers"))
+        .bearer_auth(&owner.token)
+        .json(&json!({ "name": "wave", "epoch": 1, "nonce": "n", "ct": "opaque-webp" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sticker_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["name"], "wave");
+
+    // A member can list and fetch the (still-encrypted) blob.
+    let listed: Value = client
+        .get(format!("{base}/spaces/{space_id}/stickers"))
+        .bearer_auth(&member.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["stickers"].as_array().unwrap().len(), 1);
+    let full: Value = client
+        .get(format!("{base}/spaces/{space_id}/stickers/{sticker_id}"))
+        .bearer_auth(&member.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(full["ct"], "opaque-webp");
+
+    // A member cannot upload a sticker.
+    let r = client
+        .post(format!("{base}/spaces/{space_id}/stickers"))
+        .bearer_auth(&member.token)
+        .json(&json!({ "name": "nope", "epoch": 1, "nonce": "n", "ct": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+
+    // Epoch must reference an existing space key.
+    let r = client
+        .post(format!("{base}/spaces/{space_id}/stickers"))
+        .bearer_auth(&owner.token)
+        .json(&json!({ "name": "future", "epoch": 9, "nonce": "n", "ct": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+
+    // A member cannot delete; the owner can.
+    let r = client
+        .delete(format!("{base}/spaces/{space_id}/stickers/{sticker_id}"))
+        .bearer_auth(&member.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    let r = client
+        .delete(format!("{base}/spaces/{space_id}/stickers/{sticker_id}"))
+        .bearer_auth(&owner.token)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let listed: Value = client
+        .get(format!("{base}/spaces/{space_id}/stickers"))
+        .bearer_auth(&member.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["stickers"].as_array().unwrap().len(), 0);
+}

@@ -62,6 +62,10 @@ export interface CallCallbacks {
   onRemoteStreams: (userId: string, streams: MediaStream[]) => void;
   onStats: (stats: Map<string, PeerStats>) => void;
   onBroadcastChanged: (broadcasting: boolean) => void;
+  /** Another participant joined the call (fires only for changes after our own join). */
+  onPeerJoined: (userId: string) => void;
+  /** Another participant left the call. */
+  onPeerLeft: (userId: string) => void;
   onEnded: () => void;
 }
 
@@ -73,6 +77,10 @@ export class CallManager {
   private unsubscribe: (() => void) | null = null;
   private reopenUnsub: (() => void) | null = null;
   private joined = false;
+  /** Other participants seen in the last roster, for join/leave chimes. */
+  private lastRoster = new Set<string>();
+  /** Skip chimes on the very first roster (the people already present at join). */
+  private rosterKnown = false;
   settings: BroadcastSettings = { ...DEFAULT_BROADCAST };
 
   constructor(
@@ -223,6 +231,17 @@ export class CallManager {
     switch (ev.type) {
       case 'call_roster': {
         if (!this.joined) break;
+        // Presence chimes: diff this roster against the last one. The first
+        // roster establishes a baseline silently so we don't play a join sound
+        // for everyone who was already in the call when we arrived.
+        const others = new Set(ev.participants.filter((p) => p !== this.myId));
+        if (this.rosterKnown) {
+          for (const id of others) if (!this.lastRoster.has(id)) this.cb.onPeerJoined(id);
+          for (const id of this.lastRoster) if (!others.has(id)) this.cb.onPeerLeft(id);
+        }
+        this.lastRoster = others;
+        this.rosterKnown = true;
+
         for (const userId of ev.participants) {
           if (userId !== this.myId && !this.peers.has(userId)) {
             this.createPeer(userId);

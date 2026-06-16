@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   b64u,
   canonicalJson,
+  decryptBlob,
   decryptMessage,
   deserializeIdentity,
+  encryptBlob,
   encryptMessage,
   fingerprint,
   generateIdentity,
@@ -97,6 +99,27 @@ describe('message encryption', () => {
     const alice = generateIdentity();
     const enc = encryptMessage(alice, generateSpaceKey(), meta, { t: 'text', body: 'hi' });
     expect(() => decryptMessage(alice.signPub, generateSpaceKey(), meta, enc)).toThrow();
+  });
+});
+
+describe('blob encryption (stickers)', () => {
+  it('roundtrips a binary blob under the space key', () => {
+    const key = generateSpaceKey();
+    const data = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 1, 2, 250, 255]);
+    const { nonce, ct } = encryptBlob(key, 's1', 2, data);
+    expect(decryptBlob(key, 's1', 2, nonce, ct)).toEqual(data);
+  });
+
+  it('binds the space id and epoch as AAD', () => {
+    const key = generateSpaceKey();
+    const { nonce, ct } = encryptBlob(key, 's1', 2, new Uint8Array([1, 2, 3]));
+    expect(() => decryptBlob(key, 's2', 2, nonce, ct)).toThrow();
+    expect(() => decryptBlob(key, 's1', 3, nonce, ct)).toThrow();
+  });
+
+  it('rejects the wrong key', () => {
+    const { nonce, ct } = encryptBlob(generateSpaceKey(), 's1', 1, new Uint8Array([9]));
+    expect(() => decryptBlob(generateSpaceKey(), 's1', 1, nonce, ct)).toThrow();
   });
 });
 

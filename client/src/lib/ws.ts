@@ -1,4 +1,4 @@
-import type { Channel, Member, WireMessage } from './api';
+import type { Channel, Member, StickerMeta, WireMessage } from './api';
 
 export type ServerEvent =
   | { type: 'hello'; user_id: string }
@@ -12,7 +12,9 @@ export type ServerEvent =
   | { type: 'member_removed'; space_id: string; user_id: string }
   | { type: 'key_request'; space_id: string; user: { user_id: string; kem_pub: string } }
   | { type: 'keys_updated'; space_id: string; current_epoch: number }
-  | { type: 'channel_created'; space_id: string; channel: Channel };
+  | { type: 'channel_created'; space_id: string; channel: Channel }
+  | { type: 'sticker_added'; space_id: string; sticker: StickerMeta }
+  | { type: 'sticker_removed'; space_id: string; sticker_id: string };
 
 export type ClientEvent =
   | { type: 'call_join'; channel_id: string }

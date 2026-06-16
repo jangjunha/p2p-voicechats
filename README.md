@@ -102,13 +102,17 @@ Early development. Feature scope for v1 (deliberately small):
 - [x] Architecture & protocol design
 - [x] Spaces, channels, invites
 - [x] Encrypted text chat with offline catch-up
-- [x] Voice calls (P2P mesh) — *built, pending Windows validation*
+- [x] Chat niceties: clickable links with client-side OpenGraph previews and
+      Slack-style `:shortcode:` emoji
+- [x] Owner-managed (animated) webp stickers — E2E-encrypted with the space key
+- [x] Voice calls (P2P mesh) with join/leave chimes — *built, pending Windows validation*
 - [x] Screen share with sender-side codec/bitrate/resolution/fps controls
       and system-audio capture — *built, pending the
       [Windows spike](docs/SPIKE.md)*
 - [ ] Windows installer + auto-update (Tauri bundling configured; updater
       and release pipeline still to do)
 
-Non-goals for v1: DMs, reactions, uploads, threads, search, moderation
-tooling, mobile apps. The data model deliberately leaves room for DMs and
-attachments later.
+Non-goals for v1: DMs, message reactions, general file attachments, threads,
+search, moderation tooling, mobile apps. (Stickers are a deliberately narrow
+exception to "no uploads": owner-curated, webp-only, encrypted.) The data model
+deliberately leaves room for DMs and attachments later.

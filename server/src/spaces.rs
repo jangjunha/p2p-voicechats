@@ -41,14 +41,14 @@ pub fn member_ids(c: &Connection, space_id: &str) -> rusqlite::Result<Vec<String
     rows.collect()
 }
 
-fn require_member(state: &SharedState, space_id: &str, user_id: &str) -> ApiResult<String> {
+pub(crate) fn require_member(state: &SharedState, space_id: &str, user_id: &str) -> ApiResult<String> {
     state
         .db
         .with(|c| space_role(c, space_id, user_id))?
         .ok_or_else(|| ApiError::forbidden("not a member of this space"))
 }
 
-fn require_owner(state: &SharedState, space_id: &str, user_id: &str) -> ApiResult<()> {
+pub(crate) fn require_owner(state: &SharedState, space_id: &str, user_id: &str) -> ApiResult<()> {
     match require_member(state, space_id, user_id)?.as_str() {
         "owner" => Ok(()),
         _ => Err(ApiError::forbidden("owner role required")),
@@ -89,7 +89,7 @@ fn space_json(c: &Connection, space_id: &str) -> rusqlite::Result<Option<Value>>
     })))
 }
 
-fn fanout(state: &SharedState, space_id: &str, event: &Value) -> ApiResult<()> {
+pub(crate) fn fanout(state: &SharedState, space_id: &str, event: &Value) -> ApiResult<()> {
     let members = state.db.with(|c| member_ids(c, space_id))?;
     state.hub.send_many(&members, event);
     Ok(())

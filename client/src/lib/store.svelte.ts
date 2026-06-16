@@ -7,13 +7,15 @@
  * state (spaces/members/messages/locked) is keyed by `serverId`; the non-reactive
  * connection objects (identity, api, socket, space keys) live in `conns`.
  */
-import { Api, type Member, type Space, type WireMessage } from './api';
+import { Api, type Member, type Space, type StickerMeta, type WireMessage } from './api';
 import { CallManager, DEFAULT_BROADCAST, type BroadcastSettings, type PeerStats } from './call';
 import { credentials, migrateLegacyAccount, type AccountIndex } from './credentials';
 import {
   b64u,
+  decryptBlob,
   decryptMessage,
   deserializeIdentity,
+  encryptBlob,
   encryptMessage,
   generateIdentity,
   generateSpaceKey,
@@ -24,13 +26,19 @@ import {
   unb64u,
   type Identity,
 } from './crypto';
+import { playJoin, playLeave } from './sounds';
 import { EventSocket, type ServerEvent } from './ws';
 
 export interface ChatMessage {
   id: string;
   senderId: string;
   senderName: string;
+  /** Plain text body for `kind === 'text'`; empty for stickers. */
   body: string;
+  /** Discriminates how the message renders. */
+  kind: 'text' | 'sticker';
+  /** Sticker id for `kind === 'sticker'`. */
+  stickerId?: string;
   createdAt: number;
   ok: boolean; // false = could not decrypt/verify
 }
@@ -94,6 +102,8 @@ class AppStore {
   members = $state<Record<string, Member[]>>({});
   /** `serverId|channelId` → messages */
   messages = $state<Record<string, ChatMessage[]>>({});
+  /** `serverId|spaceId` → sticker metadata (blobs fetched + decrypted lazily) */
+  stickers = $state<Record<string, StickerMeta[]>>({});
   /** `serverId|spaceId` → true when we lack the current epoch key */
   lockedSpaces = $state<Record<string, boolean>>({});
 
@@ -106,6 +116,11 @@ class AppStore {
 
   /** serverId → live connection. Never reactive. */
   private conns = new Map<string, ServerConn>();
+
+  /** `serverId|stickerId` → object URL of the decrypted webp. Non-reactive. */
+  private stickerUrls = new Map<string, string>();
+  /** In-flight sticker decrypts, deduped so concurrent renders share one fetch. */
+  private stickerLoads = new Map<string, Promise<string | null>>();
 
   // ---------- selectors ----------
 
@@ -128,6 +143,10 @@ class AppStore {
 
   messagesOf(serverId: string, channelId: string): ChatMessage[] {
     return this.messages[ck(serverId, channelId)] ?? [];
+  }
+
+  stickersOf(serverId: string, spaceId: string): StickerMeta[] {
+    return this.stickers[ck(serverId, spaceId)] ?? [];
   }
 
   lockedOf(serverId: string, spaceId: string): boolean {
@@ -302,7 +321,14 @@ class AppStore {
     delete this.spaces[serverId];
     for (const key of Object.keys(this.members)) if (key.startsWith(serverId + '|')) delete this.members[key];
     for (const key of Object.keys(this.messages)) if (key.startsWith(serverId + '|')) delete this.messages[key];
+    for (const key of Object.keys(this.stickers)) if (key.startsWith(serverId + '|')) delete this.stickers[key];
     for (const key of Object.keys(this.lockedSpaces)) if (key.startsWith(serverId + '|')) delete this.lockedSpaces[key];
+    for (const key of [...this.stickerUrls.keys()]) {
+      if (key.startsWith(serverId + '|')) {
+        URL.revokeObjectURL(this.stickerUrls.get(key)!);
+        this.stickerUrls.delete(key);
+      }
+    }
 
     credentials.saveVault(credentials.loadVault().filter((a) => a.id !== serverId));
     await credentials.deleteSecret(serverId);
@@ -363,6 +389,21 @@ class AppStore {
       case 'keys_updated':
         await this.loadSpaceKeys(serverId, ev.space_id);
         break;
+      case 'sticker_added': {
+        const key = ck(serverId, ev.space_id);
+        const list = this.stickers[key];
+        if (list && !list.some((s) => s.id === ev.sticker.id)) {
+          this.stickers[key] = [...list, ev.sticker];
+        }
+        break;
+      }
+      case 'sticker_removed': {
+        const key = ck(serverId, ev.space_id);
+        const list = this.stickers[key];
+        if (list) this.stickers[key] = list.filter((s) => s.id !== ev.sticker_id);
+        this.revokeSticker(serverId, ev.sticker_id);
+        break;
+      }
     }
   }
 
@@ -500,20 +541,28 @@ class AppStore {
       senderName: space ? this.memberName(serverId, space.id, wire.sender_id) : wire.sender_id,
       createdAt: wire.created_at,
     };
-    if (!space || !conn) return { ...base, body: '[unknown space]', ok: false };
+    if (!space || !conn) return { ...base, kind: 'text', body: '[unknown space]', ok: false };
     const key = conn.spaceKeys.get(space.id)?.get(wire.epoch);
     const pub = this.signPubOf(serverId, space.id, wire.sender_id);
-    if (!key || !pub) return { ...base, body: '[no key for this message]', ok: false };
+    if (!key || !pub) return { ...base, kind: 'text', body: '[no key for this message]', ok: false };
     try {
       const body = decryptMessage(pub, key, {
         spaceId: space.id,
         channelId,
         epoch: wire.epoch,
         senderId: wire.sender_id,
-      }, wire) as { t: string; body: string };
-      return { ...base, body: body.t === 'text' ? body.body : `[${body.t}]`, ok: true };
+      }, wire) as { t: string; body?: string; id?: string };
+      if (body.t === 'sticker' && typeof body.id === 'string') {
+        return { ...base, kind: 'sticker', body: '', stickerId: body.id, ok: true };
+      }
+      return {
+        ...base,
+        kind: 'text',
+        body: body.t === 'text' ? (body.body ?? '') : `[${body.t}]`,
+        ok: true,
+      };
     } catch {
-      return { ...base, body: '[failed to decrypt]', ok: false };
+      return { ...base, kind: 'text', body: '[failed to decrypt]', ok: false };
     }
   }
 
@@ -542,6 +591,107 @@ class AppStore {
       senderId: conn.userId,
     }, { t: 'text', body: text });
     await conn.api.postMessage(channelId, { epoch: space.current_epoch, ...enc });
+  }
+
+  // ---------- stickers ----------
+
+  async loadStickers(serverId: string, spaceId: string) {
+    const conn = this.conn(serverId);
+    if (!conn) return;
+    this.stickers[ck(serverId, spaceId)] = (await conn.api.listStickers(spaceId)).stickers;
+  }
+
+  /**
+   * Decrypt a sticker's webp into an object URL, cached for the session. Uses
+   * the sticker's own epoch key (older stickers stay readable after rotation).
+   */
+  stickerUrl(serverId: string, spaceId: string, stickerId: string): Promise<string | null> {
+    const cacheKey = ck(serverId, stickerId);
+    const cached = this.stickerUrls.get(cacheKey);
+    if (cached) return Promise.resolve(cached);
+    let inflight = this.stickerLoads.get(cacheKey);
+    if (!inflight) {
+      inflight = this.decryptSticker(serverId, spaceId, stickerId).finally(() =>
+        this.stickerLoads.delete(cacheKey),
+      );
+      this.stickerLoads.set(cacheKey, inflight);
+    }
+    return inflight;
+  }
+
+  private async decryptSticker(
+    serverId: string,
+    spaceId: string,
+    stickerId: string,
+  ): Promise<string | null> {
+    const conn = this.conn(serverId);
+    if (!conn) return null;
+    try {
+      const s = await conn.api.fetchSticker(spaceId, stickerId);
+      const key = conn.spaceKeys.get(spaceId)?.get(s.epoch);
+      if (!key) return null;
+      const bytes = decryptBlob(key, spaceId, s.epoch, s.nonce, s.ct);
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/webp' }));
+      this.stickerUrls.set(ck(serverId, stickerId), url);
+      return url;
+    } catch (e) {
+      console.warn('failed to load sticker', e);
+      return null;
+    }
+  }
+
+  /** Owner only: encrypt a webp under the current space key and upload it. */
+  async addSticker(serverId: string, spaceId: string, name: string, bytes: Uint8Array) {
+    const conn = this.conn(serverId);
+    if (!conn) return;
+    const space = this.spaces[serverId]?.find((s) => s.id === spaceId);
+    if (!space) return;
+    const epoch = space.current_epoch;
+    const key = conn.spaceKeys.get(spaceId)?.get(epoch);
+    if (!key) throw new Error('no space key available to encrypt the sticker');
+    const { nonce, ct } = encryptBlob(key, spaceId, epoch, bytes);
+    const meta = await conn.api.createSticker(spaceId, { name, epoch, nonce, ct });
+    const cacheKey = ck(serverId, spaceId);
+    const list = this.stickers[cacheKey] ?? [];
+    if (!list.some((s) => s.id === meta.id)) this.stickers[cacheKey] = [...list, meta];
+  }
+
+  async deleteSticker(serverId: string, spaceId: string, stickerId: string) {
+    const conn = this.conn(serverId);
+    if (!conn) return;
+    await conn.api.deleteSticker(spaceId, stickerId);
+    const cacheKey = ck(serverId, spaceId);
+    const list = this.stickers[cacheKey];
+    if (list) this.stickers[cacheKey] = list.filter((s) => s.id !== stickerId);
+    this.revokeSticker(serverId, stickerId);
+  }
+
+  async sendSticker(serverId: string, channelId: string, stickerId: string) {
+    const conn = this.conn(serverId);
+    if (!conn) return;
+    const space = this.spaceOfChannel(serverId, channelId);
+    if (!space) return;
+    const key = conn.spaceKeys.get(space.id)?.get(space.current_epoch);
+    if (!key) {
+      this.error = 'Waiting for another member to share the space key.';
+      return;
+    }
+    const enc = encryptMessage(conn.identity, key, {
+      spaceId: space.id,
+      channelId,
+      epoch: space.current_epoch,
+      senderId: conn.userId,
+    }, { t: 'sticker', id: stickerId });
+    await conn.api.postMessage(channelId, { epoch: space.current_epoch, ...enc });
+  }
+
+  private revokeSticker(serverId: string, stickerId: string) {
+    const cacheKey = ck(serverId, stickerId);
+    const url = this.stickerUrls.get(cacheKey);
+    if (url) {
+      URL.revokeObjectURL(url);
+      this.stickerUrls.delete(cacheKey);
+    }
   }
 
   // ---------- identity backup ----------
@@ -594,6 +744,8 @@ class AppStore {
         onBroadcastChanged: (broadcasting) => {
           if (this.call) this.call.broadcasting = broadcasting;
         },
+        onPeerJoined: () => playJoin(),
+        onPeerLeft: () => playLeave(),
         onEnded: () => {
           this.call = null;
         },
