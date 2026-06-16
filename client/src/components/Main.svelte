@@ -14,6 +14,7 @@
     | { kind: 'join'; serverId: string }
     | { kind: 'invite'; token: string }
     | { kind: 'backup'; data: string }
+    | { kind: 'info'; serverId: string }
     | { kind: 'kick'; serverId: string; spaceId: string; userId: string; name: string }
     | { kind: 'removeServer'; serverId: string; label: string };
 
@@ -145,6 +146,7 @@
           <header class="server-head">
             <span class="dot {srv.status}" title={srv.error ?? srv.status}></span>
             <span class="server-name" title={srv.serverUrl}>{serverLabel(srv.serverUrl)}</span>
+            <button class="icon" title="Account info" onclick={() => open({ kind: 'info', serverId: srv.id })}>ⓘ</button>
             <button class="icon" title="Back up identity" onclick={() => backupIdentity(srv.id)}>🔑</button>
             <button
               class="icon"
@@ -266,6 +268,31 @@
     <div class="actions">
       <button class="primary" onclick={() => copyCurrent(token)}>
         {copied ? 'Copied!' : 'Copy'}
+      </button>
+    </div>
+  </Modal>
+{:else if modal?.kind === 'info'}
+  {@const sid = modal.serverId}
+  <Modal title="Account info" onclose={close}>
+    <p class="note">
+      Your public identity on this server. The <b>signing public key</b> is what
+      other members pin to verify your messages and calls — it's safe to share.
+    </p>
+    <label class="kv">
+      User ID
+      <input class="reveal" readonly value={store.userIdOf(sid) ?? ''} onfocus={(e) => e.currentTarget.select()} />
+    </label>
+    <label class="kv">
+      Signing public key
+      <input class="reveal" readonly value={store.selfSignPub(sid)} onfocus={(e) => e.currentTarget.select()} />
+    </label>
+    <label class="kv">
+      Fingerprint
+      <input class="reveal" readonly value={store.selfFingerprint(sid)} onfocus={(e) => e.currentTarget.select()} />
+    </label>
+    <div class="actions">
+      <button class="primary" onclick={() => copyCurrent(store.selfSignPub(sid))}>
+        {copied ? 'Copied!' : 'Copy key'}
       </button>
     </div>
   </Modal>
@@ -412,8 +439,20 @@
   form input { width: 100%; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; }
   .note { margin: 0; color: var(--fg-1); font-size: 13px; line-height: 1.45; }
+  .kv {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-1);
+  }
   .reveal {
     width: 100%;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--fg-0);
     font-family: ui-monospace, monospace;
     font-size: 12px;
     word-break: break-all;
