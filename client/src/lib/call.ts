@@ -57,6 +57,34 @@ interface Peer {
   prev: Map<string, { bytes: number; ts: number; jbDelay: number; jbCount: number }>;
 }
 
+interface VisibleTrack {
+  readyState: MediaStreamTrackState;
+  muted: boolean;
+}
+interface VisibleStream {
+  getTracks(): unknown[];
+  getVideoTracks(): VisibleTrack[];
+}
+
+/**
+ * Which of a peer's streams to show/play right now.
+ *
+ * When a peer stops a screen share the sender removes the track and the m-line
+ * goes inactive, which mutes the receiver's video track (it does *not* end — the
+ * transceiver is reused). Without this filter the last frame freezes on screen
+ * forever, and a re-share arrives as a second stream that stacks a duplicate
+ * tile. So a stream with video is shown only while it has a live, unmuted video
+ * track; audio-only voice streams are always kept.
+ */
+export function visibleStreams<T extends VisibleStream>(streams: T[]): T[] {
+  return streams.filter((s) => {
+    if (s.getTracks().length === 0) return false;
+    const video = s.getVideoTracks();
+    if (video.length === 0) return true; // voice
+    return video.some((t) => t.readyState === 'live' && !t.muted);
+  });
+}
+
 export interface CallCallbacks {
   onPeersChanged: (participants: string[]) => void;
   onRemoteStreams: (userId: string, streams: MediaStream[]) => void;
@@ -302,9 +330,22 @@ export class CallManager {
     pc.onicecandidate = ({ candidate }) => {
       this.sendSignal(userId, { kind: 'ice', candidate: candidate?.toJSON() ?? null });
     };
-    pc.ontrack = ({ streams }) => {
-      for (const s of streams) peer.streams.set(s.id, s);
-      this.cb.onRemoteStreams(userId, [...peer.streams.values()]);
+    pc.ontrack = ({ track, streams }) => {
+      const refresh = () => this.refreshStreams(userId, peer);
+      for (const s of streams) {
+        if (!peer.streams.has(s.id)) {
+          peer.streams.set(s.id, s);
+          // A re-share can move a track between streams; recompute on either.
+          s.addEventListener('removetrack', refresh);
+          s.addEventListener('addtrack', refresh);
+        }
+      }
+      // mute/unmute fire when the sender stops/resumes sending this track;
+      // ended fires if the transceiver is torn down. All change visibility.
+      track.addEventListener('mute', refresh);
+      track.addEventListener('unmute', refresh);
+      track.addEventListener('ended', refresh);
+      refresh();
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') {
@@ -313,6 +354,14 @@ export class CallManager {
       }
     };
     return peer;
+  }
+
+  /** Recompute the streams a peer should be showing and notify the UI/mixer. */
+  private refreshStreams(userId: string, peer: Peer) {
+    for (const [id, s] of peer.streams) {
+      if (s.getTracks().length === 0) peer.streams.delete(id); // fully gone
+    }
+    this.cb.onRemoteStreams(userId, visibleStreams([...peer.streams.values()]));
   }
 
   private addStreamTracks(peer: Peer, stream: MediaStream) {
