@@ -122,9 +122,16 @@ space and the recipient is online; it never inspects it.
   uses perfect negotiation with the lexicographically smaller user id as the
   polite peer).
 - Disconnecting the WebSocket implies `call_leave` from all rosters.
-- Voice and screen-share travel over the same peer connections; screen share
-  is an extra video (+ audio) track added by the broadcaster with sender-side
-  codec/bitrate/resolution/fps settings applied locally.
+- Voice travels over the peer connections as audio tracks. Screen-share video,
+  where WebCodecs is available, is encoded **once** by the broadcaster and
+  fanned out over a per-viewer `broadcast-video` DataChannel
+  (`{ordered: true, maxRetransmits: 0}`, binary framing defined in
+  `client/src/lib/broadcast.ts`); shared system audio still rides as an audio
+  track. The DataChannel is negotiated through the same signed SDP signaling
+  and DTLS association, so the server stays media- and transport-blind. Where
+  WebCodecs is unavailable the broadcaster falls back to an extra WebRTC
+  video(+audio) track. Either way, sender-side codec/bitrate/resolution/fps
+  settings are applied locally. Rationale: DECISIONS.md §8.
 
 ## Versioning
 

@@ -8,9 +8,13 @@
  * All signaling payloads are signed with the sender's identity key and
  * verified against the space's pinned member keys (docs/CRYPTO.md).
  */
+import { BroadcastReceiver, BroadcastSender, broadcastVideoSupported } from './broadcast';
 import type { Identity } from './crypto';
 import { canonicalJson, signSignal, verifySignal } from './crypto';
 import type { EventSocket, ServerEvent } from './ws';
+
+/** DataChannel label for the single-encode broadcast video transport. */
+const BROADCAST_VIDEO_LABEL = 'broadcast-video';
 
 export interface BroadcastSettings {
   /** Preferred codec; 'auto' lets the browser negotiate. */
@@ -55,6 +59,10 @@ interface Peer {
   ignoreOffer: boolean;
   streams: Map<string, MediaStream>;
   prev: Map<string, { bytes: number; ts: number; jbDelay: number; jbCount: number }>;
+  /** Outbound channel feeding this peer our single-encode broadcast (we share). */
+  videoChannel?: RTCDataChannel;
+  /** Decoder for this peer's inbound broadcast (they share to us). */
+  broadcastRx?: BroadcastReceiver;
 }
 
 interface VisibleTrack {
@@ -101,6 +109,10 @@ export class CallManager {
   private peers = new Map<string, Peer>();
   private micStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
+  /** When set, screen video is encoded once here and fanned out per viewer. */
+  private sender: BroadcastSender | null = null;
+  /** Whether this webview supports the single-encode WebCodecs video path. */
+  private readonly webCodecs = broadcastVideoSupported();
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
   private reopenUnsub: (() => void) | null = null;
@@ -142,7 +154,10 @@ export class CallManager {
     this.unsubscribe?.();
     this.reopenUnsub?.();
     if (this.statsTimer) clearInterval(this.statsTimer);
+    this.sender?.stop();
+    this.sender = null;
     for (const [id, peer] of this.peers) {
+      peer.broadcastRx?.close();
       peer.pc.close();
       this.cb.onRemoteStreams(id, []);
     }
@@ -188,10 +203,25 @@ export class CallManager {
       track.onended = () => this.stopBroadcast(); // user hit the browser/OS "stop sharing"
     }
     this.screenStream = stream;
-    for (const peer of this.peers.values()) {
-      this.addStreamTracks(peer, stream);
+    const videoTrack = stream.getVideoTracks()[0];
+    if (this.webCodecs && videoTrack) {
+      // Single-encode fan-out: encode the screen once with WebCodecs and ship
+      // the encoded frames to each viewer over a DataChannel, instead of a
+      // WebRTC video track the browser would re-encode once per peer. System
+      // audio still rides the WebRTC mesh (cheap to encode, keeps A/V sync).
+      this.sender = new BroadcastSender(() => this.settings);
+      // Encode from a clone so the original track still feeds the local preview
+      // (a MediaStreamTrackProcessor takes exclusive ownership of its track).
+      await this.sender.start(videoTrack.clone());
+      for (const [userId, peer] of this.peers) {
+        this.addAudioTracks(peer, stream);
+        this.attachViewer(userId, peer);
+      }
+    } else {
+      // Fallback (webview without WebCodecs/breakout-box): per-peer mesh video.
+      for (const peer of this.peers.values()) this.addStreamTracks(peer, stream);
+      await this.applySenderSettings();
     }
-    await this.applySenderSettings();
     this.cb.onBroadcastChanged(true);
   }
 
@@ -199,7 +229,15 @@ export class CallManager {
     const stream = this.screenStream;
     if (!stream) return;
     this.screenStream = null;
+    this.sender?.stop();
+    this.sender = null;
     for (const peer of this.peers.values()) {
+      if (peer.videoChannel) {
+        peer.videoChannel.close(); // receiver tears down its decoder on close
+        peer.videoChannel = undefined;
+      }
+      // Remove any RTP senders carrying screen tracks: system audio (WebCodecs
+      // path) or screen video+audio (fallback path).
       for (const sender of peer.pc.getSenders()) {
         if (sender.track && stream.getTracks().includes(sender.track)) {
           peer.pc.removeTrack(sender); // fires negotiationneeded
@@ -221,6 +259,12 @@ export class CallManager {
           ...(s.height > 0 ? { height: { ideal: s.height, max: s.height } } : {}),
         })
         .catch(() => {});
+    }
+    if (this.sender) {
+      // WebCodecs path: the encoder owns codec/bitrate/fps. Re-read them; the
+      // capture-constraint step above already retargeted resolution/fps.
+      this.sender.updateSettings();
+      return;
     }
     for (const peer of this.peers.values()) {
       for (const tr of peer.pc.getTransceivers()) {
@@ -278,6 +322,8 @@ export class CallManager {
         // Drop peers no longer present.
         for (const [id, peer] of this.peers) {
           if (!ev.participants.includes(id)) {
+            this.sender?.removeViewer(id);
+            peer.broadcastRx?.close();
             peer.pc.close();
             this.peers.delete(id);
             this.cb.onRemoteStreams(id, []);
@@ -289,6 +335,8 @@ export class CallManager {
       case 'call_peer_left': {
         const peer = this.peers.get(ev.user_id);
         if (peer) {
+          this.sender?.removeViewer(ev.user_id);
+          peer.broadcastRx?.close();
           peer.pc.close();
           this.peers.delete(ev.user_id);
           this.cb.onRemoteStreams(ev.user_id, []);
@@ -314,7 +362,13 @@ export class CallManager {
     this.peers.set(userId, peer);
 
     if (this.micStream) this.addStreamTracks(peer, this.micStream);
-    if (this.screenStream) this.addStreamTracks(peer, this.screenStream);
+    if (this.screenStream) {
+      // Already broadcasting: hook the newcomer in. The WebCodecs path adds only
+      // the system-audio track here (video rides a DataChannel, attached below);
+      // the fallback path adds the whole screen stream as mesh tracks.
+      if (this.sender) this.addAudioTracks(peer, this.screenStream);
+      else this.addStreamTracks(peer, this.screenStream);
+    }
 
     pc.onnegotiationneeded = async () => {
       try {
@@ -353,6 +407,11 @@ export class CallManager {
         pc.restartIce();
       }
     };
+    pc.ondatachannel = ({ channel }) => {
+      if (channel.label === BROADCAST_VIDEO_LABEL) this.attachReceiver(userId, peer, channel);
+    };
+    // Already broadcasting via WebCodecs: fan out to this new viewer too.
+    if (this.sender && this.screenStream) this.attachViewer(userId, peer);
     return peer;
   }
 
@@ -361,7 +420,11 @@ export class CallManager {
     for (const [id, s] of peer.streams) {
       if (s.getTracks().length === 0) peer.streams.delete(id); // fully gone
     }
-    this.cb.onRemoteStreams(userId, visibleStreams([...peer.streams.values()]));
+    const streams = visibleStreams([...peer.streams.values()]);
+    // The single-encode broadcast arrives as a separate, decoder-fed video
+    // stream (audio still comes through the WebRTC streams above).
+    if (peer.broadcastRx) streams.push(peer.broadcastRx.stream);
+    this.cb.onRemoteStreams(userId, streams);
   }
 
   private addStreamTracks(peer: Peer, stream: MediaStream) {
@@ -369,6 +432,44 @@ export class CallManager {
       peer.pc.addTrack(track, stream);
     }
     if (stream === this.screenStream) void this.applySenderSettings();
+  }
+
+  /** Add only a stream's audio tracks (video goes over the broadcast channel). */
+  private addAudioTracks(peer: Peer, stream: MediaStream) {
+    for (const track of stream.getAudioTracks()) peer.pc.addTrack(track, stream);
+  }
+
+  /** Create this peer's broadcast channel and register it as a viewer on open. */
+  private attachViewer(userId: string, peer: Peer) {
+    if (!this.sender || peer.videoChannel) return;
+    const ch = peer.pc.createDataChannel(BROADCAST_VIDEO_LABEL, {
+      ordered: true, // SCTP delivers in order and drops (never HOL-blocks) losses
+      maxRetransmits: 0,
+    });
+    ch.binaryType = 'arraybuffer';
+    peer.videoChannel = ch;
+    ch.onopen = () => this.sender?.addViewer(userId, ch);
+    ch.onclose = () => this.sender?.removeViewer(userId);
+    // Inbound on our outbound channel = this viewer's keyframe requests.
+    ch.onmessage = (e) => {
+      if (this.sender && e.data instanceof ArrayBuffer) this.sender.handleControl(e.data);
+    };
+  }
+
+  /** Wire an inbound broadcast channel to a decoder and surface its video tile. */
+  private attachReceiver(userId: string, peer: Peer, channel: RTCDataChannel) {
+    if (!this.webCodecs) {
+      console.warn('peer is broadcasting via WebCodecs but this webview cannot decode it');
+      return;
+    }
+    peer.broadcastRx?.close();
+    peer.broadcastRx = new BroadcastReceiver(channel);
+    channel.addEventListener('close', () => {
+      peer.broadcastRx?.close();
+      peer.broadcastRx = undefined;
+      this.refreshStreams(userId, peer);
+    });
+    this.refreshStreams(userId, peer);
   }
 
   private sendSignal(to: string, payload: SignalPayload) {
@@ -466,6 +567,19 @@ export class CallManager {
           });
         }
       });
+      // The single-encode broadcast has no video RTP, so fold its own
+      // encoder/decoder telemetry into this peer's line.
+      const ss = this.sender?.stats();
+      if (ss && this.sender?.hasViewer(userId)) {
+        stats.outKbps = ss.kbps;
+        stats.outFps = ss.fps;
+        stats.encoder = `${ss.codec}${ss.hardware ? '' : ' (sw)'}`;
+      }
+      const rs = peer.broadcastRx?.stats();
+      if (rs) {
+        stats.inKbps = rs.kbps;
+        stats.inFps = rs.fps;
+      }
       out.set(userId, stats);
     }
     this.cb.onStats(out);

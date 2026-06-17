@@ -86,7 +86,7 @@
     if (st.outFps != null) parts.push(`${st.outFps}fps`);
     else if (st.inFps != null) parts.push(`${st.inFps}fps`);
     if (st.jitterBufferMs != null) parts.push(`jb ${st.jitterBufferMs.toFixed(0)}ms`);
-    if (st.encoder) parts.push(st.encoder.includes('libvpx') || st.encoder.includes('OpenH264') ? 'sw-enc' : 'hw-enc');
+    if (st.encoder) parts.push(/libvpx|OpenH264|\(sw\)/.test(st.encoder) ? 'sw-enc' : 'hw-enc');
     if (st.qualityLimitation && st.qualityLimitation !== 'none') parts.push(`limited:${st.qualityLimitation}`);
     if (st.transport === 'relay') parts.push('via relay');
     return parts.join(' · ');
