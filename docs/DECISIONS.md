@@ -89,8 +89,9 @@ Full design in [CRYPTO.md](CRYPTO.md). Summary:
   media server exists; TURN can't decrypt). To stop a malicious signaling
   server from MITM-ing key exchange, every signaling payload is signed with
   the sender's Ed25519 device identity key, which is pinned per space.
-  Frame-level encryption (SFrame/insertable streams) is unnecessary without an
-  SFU and is left as a documented extension point.
+  Frame-level encryption (SFrame) remains unnecessary without an SFU.
+  Insertable streams / WebCodecs are now used — for single-encode broadcast
+  fan-out, not for added encryption (see decision 8); E2EE is unchanged.
 - **Chat:** a per-space symmetric key (XChaCha20-Poly1305), wrapped to each
   member device's X25519 key (sealed box) and stored server-side as opaque
   blobs. Messages are encrypted + signed client-side; the server stores only
@@ -145,3 +146,46 @@ identity, and credentials live in the OS keychain — not localStorage.**
 - This supersedes the v1 "single account in localStorage" shape from the
   proof-of-concept; the single-device-per-identity simplification in decision 5
   still holds (moving a device = exporting that server's identity key).
+
+## 8. Single-encode screen broadcast (mesh fan-out)
+
+Added 2026-06-17 by the project owner.
+
+**Screen video is captured and encoded once with WebCodecs and fanned out to
+viewers as bytes over one DataChannel per peer, instead of a WebRTC video track
+that the browser re-encodes once per RTCPeerConnection.** Audio (mic + shared
+system audio) stays on the WebRTC mesh.
+
+- **Why.** In a mesh, a WebRTC video track is encoded independently for each
+  peer connection — at four viewers the broadcaster encodes the same screen
+  four times and CPU/GPU scales with the audience. Capturing once
+  (`MediaStreamTrackProcessor`), encoding once (`VideoEncoder`), and shipping
+  the resulting `EncodedVideoChunk`s makes encode cost constant in the number
+  of viewers. Upload bandwidth still scales linearly — unavoidable without an
+  SFU, which decisions 4–5 rule out.
+- **Latency is the hard constraint.** The fan-out channel is
+  `{ ordered: true, maxRetransmits: 0 }`: SCTP delivers what arrives in order
+  and *drops* (never retransmits or head-of-line-blocks) the rest. There is no
+  jitter buffer — decoded frames render immediately
+  (`MediaStreamTrackGenerator`) and a newer frame supersedes an undisplayed
+  one. Loss is repaired with keyframes: the receiver detects a frame gap (or
+  its first frame) and requests an IDR, debounced on both ends, with a periodic
+  safety-net keyframe from the sender.
+- **What this trades away vs. the decision-3 WebRTC video path,** for video
+  only: transport-cc/GCC congestion control, FEC/NACK, and the rich
+  `getStats()` encoder telemetry. Compensated by a send-buffer drop threshold
+  (shed frames rather than bloat latency under congestion), the encoder's
+  bitrate cap, and app-level encode/decode FPS+bitrate stats in the same
+  overlay.
+- **E2EE preserved.** DataChannels run over the same authenticated DTLS/SCTP
+  association as SRTP media, established from signed SDP (CRYPTO.md). The TURN
+  relay and signaling server remain unable to read the bytes.
+- **Capability-gated with graceful fallback.** Requires WebCodecs + the
+  breakout-box API (`MediaStreamTrackProcessor`/`Generator`), present in
+  WebView2 (decision 3). Where absent (e.g. older WKWebView) the broadcaster
+  transparently falls back to the original per-peer WebRTC video(+audio) track,
+  so the feature degrades rather than breaks.
+- **Rejected:** server SFU (decisions 4–5: no media server by design);
+  re-injecting one encoder's output into other peer connections via encoded
+  insertable streams (each connection still runs its own encoder — no saving
+  without building an in-client SFU).
